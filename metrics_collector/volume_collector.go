@@ -72,7 +72,7 @@ func NewVolumeCollector(
 		Desc: prometheus.NewDesc(
 			prometheus.BuildFQName(longhornName, subsystemVolume, "state"),
 			"State of this volume",
-			[]string{nodeLabel, volumeLabel, pvcLabel},
+			[]string{nodeLabel, volumeLabel, pvcLabel, stateLabel},
 			nil,
 		),
 		Type: prometheus.GaugeValue,
@@ -82,7 +82,7 @@ func NewVolumeCollector(
 		Desc: prometheus.NewDesc(
 			prometheus.BuildFQName(longhornName, subsystemVolume, "robustness"),
 			"Robustness of this volume",
-			[]string{nodeLabel, volumeLabel, pvcLabel},
+			[]string{nodeLabel, volumeLabel, pvcLabel, robustnessLabel},
 			nil,
 		),
 		Type: prometheus.GaugeValue,
@@ -197,14 +197,25 @@ func (vc *VolumeCollector) Collect(ch chan<- prometheus.Metric) {
 
 			ch <- prometheus.MustNewConstMetric(vc.capacityMetric.Desc, vc.capacityMetric.Type, float64(v.Spec.Size), vc.currentNodeID, v.Name, v.Status.KubernetesStatus.PVCName)
 			ch <- prometheus.MustNewConstMetric(vc.sizeMetric.Desc, vc.sizeMetric.Type, float64(v.Status.ActualSize), vc.currentNodeID, v.Name, v.Status.KubernetesStatus.PVCName)
-			ch <- prometheus.MustNewConstMetric(vc.stateMetric.Desc, vc.stateMetric.Type, float64(getVolumeStateValue(v)), vc.currentNodeID, v.Name, v.Status.KubernetesStatus.PVCName)
-			ch <- prometheus.MustNewConstMetric(vc.robustnessMetric.Desc, vc.robustnessMetric.Type, float64(getVolumeRobustnessValue(v)), vc.currentNodeID, v.Name, v.Status.KubernetesStatus.PVCName)
 			ch <- prometheus.MustNewConstMetric(vc.volumePerfMetrics.throughputMetrics.read.Desc, vc.volumePerfMetrics.throughputMetrics.read.Type, float64(vc.getVolumeReadThroughput(metrics)), vc.currentNodeID, v.Name, v.Status.KubernetesStatus.PVCName)
 			ch <- prometheus.MustNewConstMetric(vc.volumePerfMetrics.throughputMetrics.write.Desc, vc.volumePerfMetrics.throughputMetrics.write.Type, float64(vc.getVolumeWriteThroughput(metrics)), vc.currentNodeID, v.Name, v.Status.KubernetesStatus.PVCName)
 			ch <- prometheus.MustNewConstMetric(vc.volumePerfMetrics.iopsMetrics.read.Desc, vc.volumePerfMetrics.iopsMetrics.read.Type, float64(vc.getVolumeReadIOPS(metrics)), vc.currentNodeID, v.Name, v.Status.KubernetesStatus.PVCName)
 			ch <- prometheus.MustNewConstMetric(vc.volumePerfMetrics.iopsMetrics.write.Desc, vc.volumePerfMetrics.iopsMetrics.write.Type, float64(vc.getVolumeWriteIOPS(metrics)), vc.currentNodeID, v.Name, v.Status.KubernetesStatus.PVCName)
 			ch <- prometheus.MustNewConstMetric(vc.volumePerfMetrics.latencyMetrics.read.Desc, vc.volumePerfMetrics.latencyMetrics.read.Type, float64(vc.getVolumeReadLatency(metrics)), vc.currentNodeID, v.Name, v.Status.KubernetesStatus.PVCName)
 			ch <- prometheus.MustNewConstMetric(vc.volumePerfMetrics.latencyMetrics.write.Desc, vc.volumePerfMetrics.latencyMetrics.write.Type, float64(vc.getVolumeWriteLatency(metrics)), vc.currentNodeID, v.Name, v.Status.KubernetesStatus.PVCName)
+
+			ch <- prometheus.MustNewConstMetric(vc.robustnessMetric.Desc, vc.robustnessMetric.Type, 1, vc.currentNodeID, v.Name, v.Status.KubernetesStatus.PVCName, string(v.Status.Robustness))
+			ch <- prometheus.MustNewConstMetric(vc.stateMetric.Desc, vc.stateMetric.Type, 1, vc.currentNodeID, v.Name, v.Status.KubernetesStatus.PVCName, string(v.Status.State))
+
+			// We don't need to specify 0 for the other states because :
+			// - it means that the volume is not in these states
+			// - if it was previously in a specfic state and have transitioned in another,
+			//   Prometheus will automatically put a staleness marker on them, see https://www.robustperception.io/staleness-and-promql/
+			//   so on query time the users can fill the gaps with a default 0 if they want to
+			//
+			// And we don't want to do it because it would make the scraping slower (more metrics to scrape), and even if
+			// this is only slightly slower, the impact is multiplied by the number of volumes
+
 		}
 	}
 }
@@ -216,40 +227,6 @@ func (vc *VolumeCollector) getEngineClientProxy(engine *longhorn.Engine) (c engi
 	}
 
 	return engineapi.GetCompatibleClient(engine, engineCliClient, vc.ds, nil, vc.proxyConnCounter)
-}
-
-func getVolumeStateValue(v *longhorn.Volume) int {
-	stateValue := 0
-	switch v.Status.State {
-	case longhorn.VolumeStateCreating:
-		stateValue = 1
-	case longhorn.VolumeStateAttached:
-		stateValue = 2
-	case longhorn.VolumeStateDetached:
-		stateValue = 3
-	case longhorn.VolumeStateAttaching:
-		stateValue = 4
-	case longhorn.VolumeStateDetaching:
-		stateValue = 5
-	case longhorn.VolumeStateDeleting:
-		stateValue = 6
-	}
-	return stateValue
-}
-
-func getVolumeRobustnessValue(v *longhorn.Volume) int {
-	robustnessValue := 0
-	switch v.Status.Robustness {
-	case longhorn.VolumeRobustnessUnknown:
-		robustnessValue = 0
-	case longhorn.VolumeRobustnessHealthy:
-		robustnessValue = 1
-	case longhorn.VolumeRobustnessDegraded:
-		robustnessValue = 2
-	case longhorn.VolumeRobustnessFaulted:
-		robustnessValue = 3
-	}
-	return robustnessValue
 }
 
 func (vc *VolumeCollector) getVolumeReadThroughput(metrics *engineapi.Metrics) int64 {

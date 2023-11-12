@@ -8,8 +8,6 @@ import (
 
 	"github.com/longhorn/longhorn-manager/datastore"
 	"github.com/longhorn/longhorn-manager/types"
-
-	longhorn "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta2"
 )
 
 type BackupCollector struct {
@@ -42,7 +40,7 @@ func NewBackupCollector(
 		Desc: prometheus.NewDesc(
 			prometheus.BuildFQName(longhornName, subsystemBackup, "state"),
 			"State of this backup",
-			[]string{volumeLabel, backupLabel},
+			[]string{volumeLabel, backupLabel, stateLabel},
 			nil,
 		),
 		Type: prometheus.GaugeValue,
@@ -80,26 +78,7 @@ func (vc *BackupCollector) Collect(ch chan<- prometheus.Metric) {
 				vc.logger.WithError(err).Warn("Error get backup volume label")
 			}
 			ch <- prometheus.MustNewConstMetric(vc.sizeMetric.Desc, vc.sizeMetric.Type, size, backupVolumeName, v.Name)
-			ch <- prometheus.MustNewConstMetric(vc.stateMetric.Desc, vc.stateMetric.Type, float64(getBackupStateValue(v)), backupVolumeName, v.Name)
+			ch <- prometheus.MustNewConstMetric(vc.stateMetric.Desc, vc.stateMetric.Type, 1, backupVolumeName, v.Name, string(v.Status.State))
 		}
 	}
-}
-
-func getBackupStateValue(v *longhorn.Backup) int {
-	stateValue := 0
-	switch v.Status.State {
-	case longhorn.BackupStateNew:
-		stateValue = 0
-	case longhorn.BackupStatePending:
-		stateValue = 1
-	case longhorn.BackupStateInProgress:
-		stateValue = 2
-	case longhorn.BackupStateCompleted:
-		stateValue = 3
-	case longhorn.BackupStateError:
-		stateValue = 4
-	case longhorn.BackupStateUnknown:
-		stateValue = 5
-	}
-	return stateValue
 }
